@@ -122,6 +122,7 @@ static int LoadMedia(SS4S_PlayerContext *context) {
 
     context->mediaLoaded = true;
     clock_gettime(CLOCK_MONOTONIC, &context->mediaLoadedTime);
+    context->audioClockValid = false;
     return ret;
 }
 

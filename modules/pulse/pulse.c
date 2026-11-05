@@ -30,8 +30,9 @@ static SS4S_AudioOpenResult Open(const SS4S_AudioInfo *info, SS4S_AudioInstance 
     };
     size_t frame_size = info->samplesPerFrame * info->numOfChannels * sizeof(uint16_t);
     pa_buffer_attr buffer_attr = {
-            .maxlength = frame_size * 8 /*40ms*/,
-            .tlength = -1,
+            /* 40 ms total was too little for Wi-Fi burst arrival and caused over/underrun crackles */
+            .maxlength = frame_size * 40 /*200ms*/,
+            .tlength = frame_size * 12 /*60ms*/,
             .prebuf = -1,
             .minreq =  -1,
     };

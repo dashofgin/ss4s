@@ -21,6 +21,12 @@ struct SS4S_PlayerContext {
     bool waitAudioVideoReady;
     int aspectRatio;
     bool hasHdrInfo;
+    /* Sample-clock audio PTS (PCM only): avoids per-packet wall-clock jitter */
+    size_t audioBytesPerFrame;
+    uint32_t audioSampleRate;
+    bool audioClockValid;
+    uint64_t audioClockBaseMs;
+    uint64_t audioSamplesFed;
 };
 
 extern const SS4S_PlayerDriver SS4S_NDL_webOS5_PlayerDriver;

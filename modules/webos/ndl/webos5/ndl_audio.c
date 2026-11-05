@@ -70,6 +70,9 @@ static SS4S_AudioOpenResult OpenAudio(const SS4S_AudioInfo *info, SS4S_AudioInst
                     .sampleRate = NDL_DIRECTMEDIA_AUDIO_PCM_SAMPLE_RATE_OF(info->sampleRate),
             };
             context->mediaInfo.audio.pcm = pcmInfo;
+            context->audioBytesPerFrame = info->numOfChannels * sizeof(int16_t);
+            context->audioSampleRate = info->sampleRate;
+            context->audioClockValid = false;
             break;
         }
         case SS4S_AUDIO_OPUS: {
@@ -103,6 +106,8 @@ static SS4S_AudioOpenResult OpenAudio(const SS4S_AudioInfo *info, SS4S_AudioInst
                 }
             }
             context->mediaInfo.audio.opus = opusInfo;
+            context->audioBytesPerFrame = 0;
+            context->audioClockValid = false;
             break;
         }
         default: {
@@ -123,9 +128,41 @@ static SS4S_AudioOpenResult OpenAudio(const SS4S_AudioInfo *info, SS4S_AudioInst
     return result;
 }
 
+
+/*
+ * PTS for PCM audio, derived from the number of samples fed rather than the wall clock at feed time.
+ * Packets arrive with network jitter (and the wall clock only has ms resolution), so wall-clock PTS
+ * makes consecutive 5 ms frames look 3..8 ms apart. Newer NDL pipelines appear to honour audio PTS,
+ * which turns that jitter into audible wow/flutter. The sample clock is anchored to the wall clock and
+ * re-anchored when the two drift apart by more than AUDIO_CLOCK_RESYNC_MS (stalls, media reloads).
+ */
+#define AUDIO_CLOCK_RESYNC_MS 100
+
+static uint64_t AudioPts(SS4S_PlayerContext *context, size_t size) {
+    uint64_t now = SS4S_NDL_webOS5_GetPts(context);
+    if (context->audioBytesPerFrame == 0 || context->audioSampleRate == 0) {
+        return now;
+    }
+    if (!context->audioClockValid) {
+        context->audioClockValid = true;
+        context->audioClockBaseMs = now;
+        context->audioSamplesFed = 0;
+    }
+    uint64_t pts = context->audioClockBaseMs + context->audioSamplesFed * 1000 / context->audioSampleRate;
+    int64_t drift = (int64_t) now - (int64_t) pts;
+    if (drift > AUDIO_CLOCK_RESYNC_MS || drift < -AUDIO_CLOCK_RESYNC_MS) {
+        SS4S_NDL_webOS5_Log(SS4S_LogLevelInfo, "NDL", "Audio clock resync, drift %lld ms", (long long) drift);
+        context->audioClockBaseMs = now;
+        context->audioSamplesFed = 0;
+        pts = now;
+    }
+    context->audioSamplesFed += size / context->audioBytesPerFrame;
+    return pts;
+}
+
 static SS4S_AudioFeedResult FeedAudio(SS4S_AudioInstance *instance, const unsigned char *data, size_t size) {
     pthread_mutex_lock(&SS4S_NDL_webOS5_Lock);
-    const SS4S_PlayerContext *context = (void *) instance;
+    SS4S_PlayerContext *context = (void *) instance;
     if (!context->mediaLoaded) {
         pthread_mutex_unlock(&SS4S_NDL_webOS5_Lock);
         return SS4S_AUDIO_FEED_NOT_READY;
@@ -141,7 +178,7 @@ static SS4S_AudioFeedResult FeedAudio(SS4S_AudioInstance *instance, const unsign
         data = SS4S_NDLOpusFixGetBuffer(context->opusFix);
         size = fixedSize;
     }
-    uint64_t pts = SS4S_NDL_webOS5_GetPts(context);
+    uint64_t pts = AudioPts(context, size);
     rc = NDL_DirectAudioPlay((void *) data, size, (long long) pts);
     if (rc != 0) {
         SS4S_NDL_webOS5_Log(SS4S_LogLevelWarn, "NDL", "NDL_DirectAudioPlay returned %d: %s", rc,
